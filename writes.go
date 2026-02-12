@@ -500,12 +500,15 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 
 func performInsert(ctx context.Context, coll *mongo.Collection, size int, useCustomID bool) (int, error) {
 	newDocs := make([]any, newDocsCount)
-	padding := strings.Repeat("y", size)
+
+	// Assume that about 1/3 of each user document is keys, which are
+	// mostly identical across documents.
+	baseString := randomString(size / 3)
 
 	for i := 0; i < newDocsCount; i++ {
 		doc := bson.M{
 			"rand":        rand.Float64(),
-			"str":         padding,
+			"str":         baseString + randomString(2*size/3),
 			"fromUpdates": true,
 		}
 		if useCustomID {
