@@ -313,7 +313,7 @@ func doWork(ctx context.Context) error {
 						break
 					}
 
-					fraction := toDelete / curr
+					fraction := float64(toDelete) / float64(curr)
 
 					slog.Debug("Deleting random documents.",
 						"collection", collName,
