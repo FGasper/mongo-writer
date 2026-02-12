@@ -18,22 +18,19 @@ import (
 	"github.com/goaux/timer"
 	"github.com/mongodb-labs/migration-tools/bsontools"
 	"github.com/samber/lo"
+	"github.com/urfave/cli/v3"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/term"
 )
 
-const (
-	uri          = "mongodb://localhost:27017"
-	newDocsCount = 50000
-
-	startWorkers = 5
-)
-
 var (
+	newDocsCount  = 50000
 	docSizes      = []int{500, 1000, 2000}
 	customIDModes = []bool{true, false}
+	startWorkers  = 5
+	uri           = "mongodb://localhost:27017"
 
 	canUpdate        bool
 	db               *mongo.Database
@@ -41,10 +38,65 @@ var (
 )
 
 func main() {
-	ctx := context.Background()
+	cmd := &cli.Command{
+		Name:  "mongo-load-gen",
+		Usage: "A threaded MongoDB load generator",
+
+		// FLags: Map directly to your variables
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "uri",
+				Value:   "mongodb://localhost:27017",
+				Usage:   "MongoDB connection URI",
+				Sources: cli.EnvVars("MONGO_URI"), // Auto-read from ENV
+			},
+			&cli.IntFlag{
+				Name:    "workers",
+				Aliases: []string{"w"},
+				Value:   startWorkers,
+				Usage:   "Number of initial concurrent workers",
+			},
+			&cli.IntFlag{
+				Name:    "docsPerBatch",
+				Aliases: []string{"d"},
+				Value:   newDocsCount,
+				Usage:   "Number of documents to insert per batch",
+			},
+			&cli.IntSliceFlag{
+				Name:    "docSizes",
+				Aliases: []string{"s"},
+				Value:   docSizes,
+				Usage:   "Document sizes (in bytes) to generate",
+			},
+		},
+
+		// ACTION: This is where your actual main() logic goes
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			// 1. Retrieve Flag Values
+			uri = cmd.String("uri")
+			startWorkers = cmd.Int("workers")
+			newDocsCount = cmd.Int("docs")
+
+			// 2. Validate or Parse Complex Flags
+			// (e.g., converting string slice to int slice)
+			docSizes = cmd.IntSlice("sizes")
+
+			// 3. Run your application logic
+			// return runLoadTest(ctx, uri, workers, docCount)
+			return run(ctx)
+		},
+	}
+
+	// EXECUTE
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context) error {
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect(ctx)
 
@@ -165,8 +217,7 @@ func main() {
 	for {
 		n, err := os.Stdin.Read(b)
 		if err != nil {
-			slog.Error("stdin read", "error", err)
-			break
+			return fmt.Errorf("read stdin: %w", err)
 		}
 
 		if n == 0 {
@@ -175,7 +226,7 @@ func main() {
 
 		switch b[0] {
 		case '\x03': // CTRL-C
-			return
+			return nil
 		case '\x0d': // Enter
 			slog.Info("", "workers", len(workerCancel))
 		case '\x1b':
