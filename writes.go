@@ -41,14 +41,14 @@ var (
 
 func main() {
 	cmd := &cli.Command{
-		Name:  "mongo-load-gen",
+		Name:  "mongo-writer",
 		Usage: "A threaded MongoDB load generator",
 
 		// FLags: Map directly to your variables
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "uri",
-				Value:   "mongodb://localhost:27017",
+				Value:   "mongodb://localhost",
 				Usage:   "MongoDB connection URI",
 				Sources: cli.EnvVars("MONGO_URI"), // Auto-read from ENV
 			},
@@ -67,7 +67,7 @@ func main() {
 			&cli.IntSliceFlag{
 				Name:    "docSizes",
 				Aliases: []string{"s"},
-				Value:   slices.Clone(docSizes),
+				Value:   docSizes,
 				Usage:   "Document sizes (in bytes) to generate",
 			},
 			&cli.BoolFlag{
