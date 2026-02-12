@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/goaux/timer v1.1.0
-	github.com/mongodb-labs/migration-tools v0.0.0-20260212055035-c8addefde9a5
+	github.com/mongodb-labs/migration-tools v0.0.0-20260212055521-3aefa6f009d6
 	github.com/samber/lo v1.52.0
 	github.com/urfave/cli/v3 v3.6.2
 	go.mongodb.org/mongo-driver/v2 v2.5.0
