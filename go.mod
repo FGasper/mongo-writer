@@ -4,6 +4,8 @@ go 1.25.5
 
 require (
 	github.com/klauspost/compress v1.17.6 // indirect
+	github.com/mongodb-labs/migration-tools v0.0.0-20260206045746-a88899c9f1a9 // indirect
+	github.com/samber/lo v1.52.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
