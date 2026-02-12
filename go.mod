@@ -3,6 +3,7 @@ module github.com/FGasper/mongo-loader
 go 1.25.5
 
 require (
+	github.com/goaux/timer v1.1.0 // indirect
 	github.com/klauspost/compress v1.17.6 // indirect
 	github.com/mongodb-labs/migration-tools v0.0.0-20260206045746-a88899c9f1a9 // indirect
 	github.com/samber/lo v1.52.0 // indirect
@@ -13,5 +14,7 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/term v0.40.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 )

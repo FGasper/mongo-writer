@@ -2,31 +2,42 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"log/slog"
+	"maps"
 	"math/rand"
+	"os"
+	"os/signal"
+	"slices"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 
+	"github.com/goaux/timer"
 	"github.com/mongodb-labs/migration-tools/bsontools"
 	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"golang.org/x/term"
 )
 
 const (
 	uri          = "mongodb://localhost:27017"
 	newDocsCount = 50000
 
-	workers = 50
+	startWorkers = 5
 )
 
 var (
 	docSizes      = []int{500, 1000, 2000}
 	customIDModes = []bool{true, false}
+
+	canUpdate        bool
+	db               *mongo.Database
+	allOldDocsCounts = make(map[string]int64)
 )
 
 func main() {
@@ -37,79 +48,234 @@ func main() {
 	}
 	defer client.Disconnect(ctx)
 
-	db := client.Database("test")
-	canUpdate, _ := checkUpdateCapability(client)
-	allOldDocsCounts := make(map[string]int64)
+	db = client.Database("test")
+	canUpdate, _ = checkUpdateCapability(ctx, client)
 
-	sg := sync.WaitGroup{}
+	for _, docSize := range docSizes {
+		for _, useCustomID := range customIDModes {
+			collName := getCollectionName(useCustomID, docSize)
+			coll := db.Collection(collName)
 
-	for range workers {
-		sg.Go(
-			func() {
-				for {
-					for _, docSize := range docSizes {
-						for _, useCustomID := range customIDModes {
-							collName := getCollectionName(useCustomID, docSize)
-							coll := db.Collection(collName)
-
-							startTime := time.Now()
-							results := bson.M{"plainInserts": 0, "plainDeletes": 0}
-
-							if _, exists := allOldDocsCounts[collName]; !exists {
-								count, _ := coll.EstimatedDocumentCount(ctx)
-								allOldDocsCounts[collName] = count
-							}
-							baseline := allOldDocsCounts[collName]
-
-							// --- 1. INSERT ---
-							fmt.Printf("%s: Inserting %d documents …\n", collName, newDocsCount)
-							results["plainInserts"] = performInsert(ctx, coll, docSize, useCustomID)
-
-							// --- 2. UPDATE ---
-							if canUpdate {
-								fmt.Printf("%s: Updating documents …\n", collName)
-								results["updates"] = performUpdate(ctx, coll)
-							}
-
-							// --- 3. DELETE ---
-							totalDeleted := 0
-							for {
-								curr, _ := coll.EstimatedDocumentCount(ctx)
-
-								toDelete := curr - baseline
-
-								if toDelete < 1 {
-									break
-								}
-
-								fraction := toDelete / curr
-
-								fmt.Printf("%s: Deleting about %d random documents …\n", collName, toDelete)
-
-								delRes, err := coll.DeleteMany(ctx, bson.D{{"$sampleRate", fraction}})
-								if err == nil {
-									totalDeleted += int(delRes.DeletedCount)
-								} else {
-									fmt.Printf("Failed to delete: %v\n", err)
-									break
-								}
-							}
-							results["plainDeletes"] = totalDeleted
-
-							elapsed := time.Since(startTime).Seconds()
-							j, _ := json.Marshal(results)
-							fmt.Printf("%s: Writes sent over %.2f secs: %s\n", collName, elapsed, j)
-						}
-					}
-				}
-			},
-		)
+			count := lo.Must(coll.EstimatedDocumentCount(ctx))
+			allOldDocsCounts[collName] = count
+		}
 	}
 
-	sg.Wait()
+	//----------------------------------------------
+
+	// 1. Set Terminal to Raw Mode
+	// This disables "echo" (seeing what you type) and buffering (waiting for Enter)
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		panic(err)
+	}
+	// CRITICAL: Restore terminal on exit, or your shell will be broken!
+	restoreTerm := func() {
+		_ = term.Restore(int(os.Stdin.Fd()), oldState)
+	}
+	defer restoreTerm()
+
+	crlfWriter := CRLFWriter{os.Stdout}
+	slog.SetDefault(
+		slog.New(
+			slog.NewTextHandler(
+				crlfWriter,
+				&slog.HandlerOptions{
+					ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+						// If the key is "msg" and the value is empty, drop it.
+						if a.Key == slog.MessageKey && a.Value.String() == "" {
+							return slog.Attr{} // Return empty attr to discard
+						}
+						return a
+					},
+				},
+			),
+		),
+	)
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGABRT, syscall.SIGALRM)
+	go func() {
+		<-c
+		restoreTerm() // Critical: Fix terminal before dying
+		os.Exit(1)
+	}()
+
+	//----------------------------------------------
+
+	workerCancel := map[int]context.CancelCauseFunc{}
+
+	addWorker := func() {
+		workerNum := len(workerCancel)
+
+		var workerCtx context.Context
+		workerCtx, workerCancel[workerNum] = context.WithCancelCause(ctx)
+
+		go func() {
+			defer func() {
+				workerCancel[workerNum](fmt.Errorf("worker %d ending", workerNum))
+				delete(workerCancel, workerNum)
+			}()
+
+			for {
+				if err := doWork(workerCtx); err != nil {
+					if errors.Is(err, context.Canceled) {
+						slog.Info("Worker ended.", "remaining", len(workerCancel))
+						break
+					}
+
+					slog.Error("Worker failed; will retry.", "error", err, "remaining", len(workerCancel))
+
+					// No need to check the error since doWork will fail.
+					_ = timer.SleepCause(workerCtx, 2*time.Second)
+				}
+			}
+		}()
+	}
+
+	slog.Info("Starting workers.", "count", startWorkers)
+
+	for range startWorkers {
+		addWorker()
+	}
+
+	popWorker := func() bool {
+		index, ok := lo.Last(slices.Sorted(maps.Keys(workerCancel)))
+
+		if !ok {
+			return false
+		}
+
+		workerCancel[index](fmt.Errorf("manual shutdown"))
+
+		return true
+	}
+
+	// A clean way to print in raw mode (since \n doesn't return carriage anymore)
+	printRaw := func(s any) {
+		fmt.Print(s, "\r\n")
+	}
+
+	printRaw("Press up to add a thread or down to remove one.")
+
+	// 2. The Input Loop
+	// We read 3 bytes at a time to catch the full arrow key sequence
+	b := make([]byte, 3)
+
+	for {
+		n, err := os.Stdin.Read(b)
+		if err != nil {
+			slog.Error("stdin read", "error", err)
+			break
+		}
+
+		if n == 0 {
+			continue
+		}
+
+		switch b[0] {
+		case '\x03': // CTRL-C
+			return
+		case '\x0d': // Enter
+			slog.Info("", "workers", len(workerCancel))
+		case '\x1b':
+			if b[1] == '[' {
+				switch b[2] {
+				case 'A': // up arrow
+					addWorker()
+					slog.Info("Added worker", "newCount", len(workerCancel))
+
+				case 'B': // down arrow
+					popWorker()
+				}
+			}
+		}
+	}
 }
 
-func performUpdate(ctx context.Context, coll *mongo.Collection) int32 {
+func doWork(ctx context.Context) error {
+	for {
+		for _, docSize := range docSizes {
+			for _, useCustomID := range customIDModes {
+				collName := getCollectionName(useCustomID, docSize)
+				coll := db.Collection(collName)
+
+				startTime := time.Now()
+
+				baseline := allOldDocsCounts[collName]
+
+				var err error
+
+				// --- 1. INSERT ---
+				slog.Debug("Inserting documents.",
+					"collection", collName,
+					"count", newDocsCount,
+				)
+
+				var attrs []slog.Attr
+
+				inserts, err := performInsert(ctx, coll, docSize, useCustomID)
+				if err != nil {
+					return fmt.Errorf("insert: %w", err)
+				}
+
+				attrs = append(attrs, slog.Int("inserts", inserts))
+
+				// --- 2. UPDATE ---
+				if canUpdate {
+					slog.Debug("Updating documents.",
+						"collection", collName,
+					)
+
+					updates, err := performUpdate(ctx, coll)
+
+					if err != nil {
+						return fmt.Errorf("update: %w", err)
+					}
+
+					attrs = append(attrs, slog.Int("updates", int(updates)))
+				}
+
+				// --- 3. DELETE ---
+				totalDeleted := 0
+				for {
+					curr, _ := coll.EstimatedDocumentCount(ctx)
+
+					toDelete := curr - baseline
+
+					if toDelete < 1 {
+						break
+					}
+
+					fraction := toDelete / curr
+
+					slog.Debug("Deleting random documents.",
+						"collection", collName,
+						"count", toDelete,
+					)
+
+					delRes, err := coll.DeleteMany(ctx, bson.D{{"$sampleRate", fraction}})
+					if err == nil {
+						totalDeleted += int(delRes.DeletedCount)
+					} else {
+						return fmt.Errorf("delete: %w", err)
+					}
+				}
+
+				attrs = append(
+					attrs,
+					slog.Int("deleted", totalDeleted),
+					slog.Duration("elapsed", time.Since(startTime)),
+					slog.String("collection", collName),
+				)
+
+				slog.Info("Writes sent.", lo.ToAnySlice(attrs)...)
+			}
+		}
+	}
+}
+
+func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 	// We use []bson.M for the outer stages (as requested),
 	// but strictly use bson.D for the operators to avoid invalid map usage.
 	pipeline := []bson.M{
@@ -205,14 +371,13 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) int32 {
 	raw, err := res.Raw()
 
 	if err != nil {
-		fmt.Printf("Failed to update: %v\n", err)
-		return 0
+		return 0, err
 	}
 
-	return lo.Must(bsontools.RawLookup[int32](raw, "nModified"))
+	return bsontools.RawLookup[int32](raw, "nModified")
 }
 
-func performInsert(ctx context.Context, coll *mongo.Collection, size int, useCustomID bool) int {
+func performInsert(ctx context.Context, coll *mongo.Collection, size int, useCustomID bool) (int, error) {
 	newDocs := make([]any, newDocsCount)
 	padding := strings.Repeat("y", size)
 
@@ -230,11 +395,9 @@ func performInsert(ctx context.Context, coll *mongo.Collection, size int, useCus
 
 	res, err := coll.InsertMany(ctx, newDocs, options.InsertMany().SetOrdered(false))
 	if err != nil {
-		fmt.Printf("Failed to insert: %v\n", err)
-		time.Sleep(3 * time.Second)
-		return 0
+		return 0, err
 	}
-	return len(res.InsertedIDs)
+	return len(res.InsertedIDs), nil
 }
 
 func getCollectionName(useCustomID bool, size int) string {
@@ -245,9 +408,9 @@ func getCollectionName(useCustomID bool, size int) string {
 	return fmt.Sprintf("%s_%d", prefix, size)
 }
 
-func checkUpdateCapability(client *mongo.Client) (bool, error) {
+func checkUpdateCapability(ctx context.Context, client *mongo.Client) (bool, error) {
 	var info bson.M
-	err := client.Database("admin").RunCommand(context.TODO(), bson.D{{"buildInfo", 1}}).Decode(&info)
+	err := client.Database("admin").RunCommand(ctx, bson.D{{"buildInfo", 1}}).Decode(&info)
 	if err != nil {
 		return false, err
 	}
