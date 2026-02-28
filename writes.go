@@ -223,13 +223,18 @@ func run(ctx context.Context) error {
 		time.Sleep(5 * time.Second)
 
 		for {
-			logs := writesHistory.Get()
-			elapsed := time.Since(logs[0].At)
+			var perSecond float64
 
-			perSecond := float64(history.SumLogs(logs)) / elapsed.Seconds()
+			logs := writesHistory.Get()
+
+			if len(logs) > 0 {
+				elapsed := time.Since(logs[0].At)
+				perSecond = float64(history.SumLogs(logs)) / elapsed.Seconds()
+			}
 
 			slog.Info("Periodic stats",
 				"writesPerSecond", localizer.Sprintf("%.02f", perSecond),
+				"batches", len(logs),
 			)
 
 			time.Sleep(10 * time.Second)
