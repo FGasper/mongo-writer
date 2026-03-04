@@ -515,6 +515,19 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 	*/
 
 	if VersionAtLeast(versionArray[:], 4, 2) {
+		var query bson.D
+
+		if VersionAtLeast(versionArray[:], 4, 4) {
+			query = bson.D{{"$sampleRate", 0.01}}
+		} else {
+			ids, err := getDocIDs(ctx, coll, 100_000)
+			if err != nil {
+				return 0, fmt.Errorf("fetching doc IDs: %w", err)
+			}
+
+			query = bson.D{{"_id", bson.D{{"$in", ids}}}}
+		}
+
 		res := coll.Database().RunCommand(
 			ctx,
 			bson.D{
@@ -522,7 +535,7 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 				{"ordered", false},
 				{"updates", []bson.D{
 					{
-						{"q", bson.D{{"$sampleRate", 0.01}}},
+						{"q", query},
 						{"u", pipeline},
 						{"multi", true},
 					},
