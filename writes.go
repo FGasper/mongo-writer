@@ -311,6 +311,11 @@ func printRaw(s any) {
 }
 
 func doWork(ctx context.Context) error {
+	srcVersion, err := GetVersionArray(ctx, db.Client())
+	if err != nil {
+		return fmt.Errorf("getting source version: %w", err)
+	}
+
 	for {
 		for _, docSize := range docSizes {
 			for _, useCustomID := range customIDModes {
@@ -386,17 +391,56 @@ func doWork(ctx context.Context) error {
 						"fraction", localizer.Sprintf("%f", fraction),
 					)
 
-					delRes, err := coll.DeleteMany(ctx, bson.D{{"$sampleRate", fraction}})
-					if err == nil {
-						slog.Debug("Deleted documents.",
-							"collection", collName,
-							"count", localizer.Sprintf("%d", delRes.DeletedCount),
+					if VersionAtLeast(srcVersion[:], 4, 4) {
+						delRes, err := coll.DeleteMany(ctx, bson.D{{"$sampleRate", fraction}})
+						if err == nil {
+							slog.Debug("Deleted documents.",
+								"collection", collName,
+								"count", localizer.Sprintf("%d", delRes.DeletedCount),
+							)
+
+							writesHistory.Add(int(delRes.DeletedCount))
+							totalDeleted += int(delRes.DeletedCount)
+						} else {
+							return fmt.Errorf("delete: %w", err)
+						}
+					} else {
+						cursor, err := coll.Aggregate(
+							ctx,
+							mongo.Pipeline{
+								{{"$sample", toDelete}},
+								{{"$project", bson.D{{"_id", 1}}}},
+							},
+						)
+						if err != nil {
+							return fmt.Errorf("get %d doc IDs: %w", toDelete, err)
+						}
+
+						var docs []bson.Raw
+						err = cursor.All(ctx, &docs)
+						if err != nil {
+							return fmt.Errorf("read %d doc IDs: %w", toDelete, err)
+						}
+
+						ids := lo.Map(
+							docs,
+							func(doc bson.Raw, _ int) bson.RawValue {
+								return doc.Lookup("_id")
+							},
 						)
 
-						writesHistory.Add(int(delRes.DeletedCount))
-						totalDeleted += int(delRes.DeletedCount)
-					} else {
-						return fmt.Errorf("delete: %w", err)
+						delRes, err := coll.DeleteMany(ctx, bson.D{{"_id", bson.D{{"$in", ids}}}})
+						if err == nil {
+							slog.Debug("Deleted documents.",
+								"collection", collName,
+								"count", localizer.Sprintf("%d", delRes.DeletedCount),
+							)
+
+							writesHistory.Add(int(delRes.DeletedCount))
+							totalDeleted += int(delRes.DeletedCount)
+						} else {
+							return fmt.Errorf("delete: %w", err)
+						}
 					}
 				}
 
@@ -558,4 +602,55 @@ func checkUpdateCapability(ctx context.Context, client *mongo.Client) (bool, err
 	}
 	v, _ := info["version"].(string)
 	return strings.HasPrefix(v, "4.4") || v >= "5.0", nil
+}
+
+func GetVersionArray(ctx context.Context, client *mongo.Client) ([3]int, error) {
+	commandResult := client.Database("admin").RunCommand(ctx, bson.D{{"buildinfo", 1}})
+
+	var va [3]int
+
+	rawResp, err := commandResult.Raw()
+	if err != nil {
+		return va, fmt.Errorf("failed to run %#q: %w", "buildinfo", err)
+	}
+
+	bi := struct {
+		VersionArray []int
+	}{}
+
+	err = bson.Unmarshal(rawResp, &bi)
+	if err != nil {
+		return va, fmt.Errorf("failed to decode build info version array: %w", err)
+	}
+
+	copy(va[:], bi.VersionArray)
+
+	return va, nil
+}
+
+func VersionAtLeast(version []int, nums ...int) bool {
+	lo.Assertf(
+		len(nums) > 0,
+		"need at least a major version to check version (%v) against",
+		version,
+	)
+
+	for i := range nums {
+		lo.Assertf(
+			len(version) >= i+1,
+			"version %v is too short to compare against %v",
+			version,
+			nums,
+		)
+
+		if version[i] < nums[i] {
+			return false
+		}
+
+		if version[i] > nums[i] {
+			break
+		}
+	}
+
+	return true
 }
