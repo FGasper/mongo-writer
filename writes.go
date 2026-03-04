@@ -408,7 +408,7 @@ func doWork(ctx context.Context) error {
 						cursor, err := coll.Aggregate(
 							ctx,
 							mongo.Pipeline{
-								{{"$sample", toDelete}},
+								{{"$sample", bson.D{{"size", toDelete}}}},
 								{{"$project", bson.D{{"_id", 1}}}},
 							},
 						)
