@@ -561,7 +561,7 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 		),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("")
+		return 0, fmt.Errorf("merge aggregation: %w", err)
 	}
 	cursor.Close(ctx)
 
