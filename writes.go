@@ -520,7 +520,7 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 		if VersionAtLeast(versionArray[:], 4, 4) {
 			query = bson.D{{"$sampleRate", 0.01}}
 		} else {
-			ids, err := getDocIDs(ctx, coll, 100_000)
+			ids, err := getDocIDs(ctx, coll, 50_000)
 			if err != nil {
 				return 0, fmt.Errorf("fetching doc IDs: %w", err)
 			}
