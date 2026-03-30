@@ -289,6 +289,26 @@ func run(ctx context.Context) error {
 		switch b[0] {
 		case '\x03': // CTRL-C
 			return nil
+		case '\x1a':
+			restoreTerm()
+
+			// Register for SIGCONT before stopping
+			contC := make(chan os.Signal, 1)
+			signal.Notify(contC, syscall.SIGCONT)
+
+			// Now stop — terminal is already restored
+			p, _ := os.FindProcess(os.Getpid())
+			p.Signal(syscall.SIGSTOP) // SIGTSTP, not SIGSTOP — shell can resume it
+
+			// Block until SIGCONT (fg command)
+			<-contC
+			signal.Stop(contC)
+
+			// Re-enter raw mode
+			oldState, err = term.MakeRaw(int(os.Stdin.Fd()))
+			if err != nil {
+				return fmt.Errorf("re-entering raw mode: %w", err)
+			}
 		case '\x0d': // Enter
 			slog.Info("", "workers", workerCancel.Size())
 		case '\x1b':
@@ -357,7 +377,6 @@ func doWork(ctx context.Context) error {
 				)
 
 				updates, err := performUpdate(ctx, coll)
-
 				if err != nil {
 					return fmt.Errorf("update: %w", err)
 				}
@@ -543,7 +562,6 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 			},
 		)
 		raw, err := res.Raw()
-
 		if err != nil {
 			return 0, err
 		}
