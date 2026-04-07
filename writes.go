@@ -44,7 +44,8 @@ var (
 
 	logLevel = slog.LevelInfo
 
-	writesHistory = history.New[int](time.Minute)
+	writesHistory     = history.New[int](time.Minute)
+	brokenPipeHistory = history.New[int](time.Minute)
 
 	localizer = message.NewPrinter(language.English)
 )
@@ -118,7 +119,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer client.Disconnect(ctx)
+	defer func() { _ = client.Disconnect(ctx) }()
 
 	db = client.Database("test")
 	versionArray = lo.Must(GetVersionArray(ctx, client))
@@ -216,8 +217,9 @@ func run(ctx context.Context) error {
 
 					// Broken-pipe errors are so frequent that there’s little point
 					// in surfacing them.
-					if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
+					if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) || strings.Contains(err.Error(), "broken pipe") {
 						delay = 10 * time.Millisecond
+						brokenPipeHistory.Add(1)
 					} else {
 						delay = 2 * time.Second
 						slog.Warn("Worker failed; will retry.", "error", err, "remaining", workerCancel.Size())
@@ -234,18 +236,26 @@ func run(ctx context.Context) error {
 		time.Sleep(5 * time.Second)
 
 		for {
-			var perSecond float64
+			var writesPerSecond, brokenPipesPerSecond float64
 
 			logs := writesHistory.Get()
 
 			if len(logs) > 0 {
 				elapsed := time.Since(logs[0].At)
-				perSecond = float64(history.SumLogs(logs)) / elapsed.Seconds()
+				writesPerSecond = float64(history.SumLogs(logs)) / elapsed.Seconds()
+			}
+
+			pipeLogs := brokenPipeHistory.Get()
+
+			if len(pipeLogs) > 0 {
+				elapsed := time.Since(pipeLogs[0].At)
+				brokenPipesPerSecond = float64(history.SumLogs(pipeLogs)) / elapsed.Seconds()
 			}
 
 			slog.Info("Periodic stats",
-				"writesPerSecond", localizer.Sprintf("%.02f", perSecond),
+				"writesPerSecond", localizer.Sprintf("%.02f", writesPerSecond),
 				"batches", len(logs),
+				"brokenPipesPerSecond", localizer.Sprintf("%.02f", brokenPipesPerSecond),
 			)
 
 			time.Sleep(10 * time.Second)
@@ -308,7 +318,7 @@ func run(ctx context.Context) error {
 
 			// Now stop — terminal is already restored
 			p, _ := os.FindProcess(os.Getpid())
-			p.Signal(syscall.SIGSTOP) // SIGTSTP, not SIGSTOP — shell can resume it
+			_ = p.Signal(syscall.SIGSTOP) // SIGTSTP, not SIGSTOP — shell can resume it
 
 			// Block until SIGCONT (fg command)
 			<-contC
@@ -670,16 +680,6 @@ func getCollectionName(useCustomID bool, size int) string {
 		prefix = "customID"
 	}
 	return fmt.Sprintf("%s_%d", prefix, size)
-}
-
-func checkUpdateCapability(ctx context.Context, client *mongo.Client) (bool, error) {
-	var info bson.M
-	err := client.Database("admin").RunCommand(ctx, bson.D{{"buildInfo", 1}}).Decode(&info)
-	if err != nil {
-		return false, err
-	}
-	v, _ := info["version"].(string)
-	return strings.HasPrefix(v, "4.4") || v >= "5.0", nil
 }
 
 func GetVersionArray(ctx context.Context, client *mongo.Client) ([3]int, error) {
