@@ -248,15 +248,18 @@ func run(ctx context.Context) error {
 			pipeLogs := brokenPipeHistory.Get()
 
 			if len(pipeLogs) > 0 {
-				elapsed := time.Since(pipeLogs[0].At)
-				brokenPipesPerSecond = float64(history.SumLogs(pipeLogs)) / elapsed.Seconds()
+				brokenPipesPerSecond = history.RatePer(pipeLogs, time.Second)
 			}
 
-			slog.Info("Periodic stats",
+			attrs := []any{
 				"writesPerSecond", localizer.Sprintf("%.02f", writesPerSecond),
 				"batches", len(logs),
-				"brokenPipesPerSecond", localizer.Sprintf("%.02f", brokenPipesPerSecond),
-			)
+			}
+			if brokenPipesPerSecond > 0 {
+				attrs = append(attrs, "brokenPipesPerSecond", localizer.Sprintf("%.02f", brokenPipesPerSecond))
+			}
+
+			slog.Info("Periodic stats", attrs...)
 
 			time.Sleep(10 * time.Second)
 		}

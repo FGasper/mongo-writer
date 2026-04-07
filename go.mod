@@ -1,12 +1,12 @@
 module github.com/FGasper/mongo-writer
 
-go 1.25.0
+go 1.25.7
 
 require (
 	github.com/MatusOllah/slogcolor v1.7.0
 	github.com/fatih/color v1.18.0
 	github.com/goaux/timer v1.1.0
-	github.com/mongodb-labs/migration-tools v0.0.0-20260212055824-55145e646e29
+	github.com/mongodb-labs/migration-tools v0.0.0-20260327172435-ed1b4771003e
 	github.com/puzpuzpuz/xsync/v4 v4.4.0
 	github.com/samber/lo v1.52.0
 	github.com/urfave/cli/v3 v3.6.2
