@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"math/rand"
@@ -211,10 +212,19 @@ func run(ctx context.Context) error {
 						break
 					}
 
-					slog.Warn("Worker failed; will retry.", "error", err, "remaining", workerCancel.Size())
+					var delay time.Duration
+
+					// Broken-pipe errors are so frequent that there’s little point
+					// in surfacing them.
+					if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
+						delay = 10 * time.Millisecond
+					} else {
+						delay = 2 * time.Second
+						slog.Warn("Worker failed; will retry.", "error", err, "remaining", workerCancel.Size())
+					}
 
 					// No need to check the error since doWork will fail.
-					_ = timer.SleepCause(workerCtx, 2*time.Second)
+					_ = timer.SleepCause(workerCtx, delay)
 				}
 			}
 		}()
