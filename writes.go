@@ -236,19 +236,25 @@ func run(ctx context.Context) error {
 		time.Sleep(5 * time.Second)
 
 		for {
-			var writesPerSecond, brokenPipesPerSecond float64
+			var writesPerSecond, brokenPipesPerSecond, failurePercentage float64
 
 			logs := writesHistory.Get()
+			totalWrites := history.SumLogs(logs)
 
 			if len(logs) > 0 {
 				elapsed := time.Since(logs[0].At)
-				writesPerSecond = float64(history.SumLogs(logs)) / elapsed.Seconds()
+				writesPerSecond = float64(totalWrites) / elapsed.Seconds()
 			}
 
 			pipeLogs := brokenPipeHistory.Get()
+			totalBrokenPipes := history.SumLogs(pipeLogs)
 
 			if len(pipeLogs) > 0 {
 				brokenPipesPerSecond = history.RatePer(pipeLogs, time.Second)
+			}
+
+			if totalWrites+totalBrokenPipes > 0 {
+				failurePercentage = (float64(totalBrokenPipes) / float64(totalWrites+totalBrokenPipes)) * 100
 			}
 
 			attrs := []any{
@@ -257,6 +263,9 @@ func run(ctx context.Context) error {
 			}
 			if brokenPipesPerSecond > 0 {
 				attrs = append(attrs, "brokenPipesPerSecond", localizer.Sprintf("%.02f", brokenPipesPerSecond))
+			}
+			if failurePercentage > 0 {
+				attrs = append(attrs, "failurePercentage", localizer.Sprintf("%.02f", failurePercentage))
 			}
 
 			slog.Info("Periodic stats", attrs...)
