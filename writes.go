@@ -403,7 +403,26 @@ func doWork(ctx context.Context) error {
 
 				attrs = append(attrs, slog.Int("inserts", inserts))
 
-				// --- 2. UPDATE ---
+				// --- 2. SIMPLE UPDATE ---
+				slog.Debug("Simple updating documents.",
+					"collection", collName,
+				)
+
+				simpleUpdates, err := performSimpleUpdate(ctx, coll)
+				if err != nil {
+					return fmt.Errorf("simple update: %w", err)
+				}
+
+				slog.Debug("Simple updated documents.",
+					"collection", collName,
+					"count", localizer.Sprintf("%d", simpleUpdates),
+				)
+
+				writesHistory.Add(int(simpleUpdates))
+
+				attrs = append(attrs, slog.Int("simpleUpdates", int(simpleUpdates)))
+
+				// --- 3. UPDATE ---
 				slog.Debug("Updating documents.",
 					"collection", collName,
 				)
@@ -486,6 +505,45 @@ func doWork(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func performSimpleUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
+	var query bson.D
+
+	if VersionAtLeast(versionArray[:], 4, 4) {
+		query = bson.D{{"$sampleRate", 0.01}}
+	} else {
+		ids, err := getDocIDs(ctx, coll, 50_000)
+		if err != nil {
+			return 0, fmt.Errorf("fetching doc IDs: %w", err)
+		}
+
+		query = bson.D{{"_id", bson.D{{"$in", ids}}}}
+	}
+
+	res := coll.Database().RunCommand(
+		ctx,
+		bson.D{
+			{"update", coll.Name()},
+			{"ordered", false},
+			{"updates", []bson.D{
+				{
+					{"q", query},
+					{"u", bson.D{
+						{"$inc", bson.D{{"updateCount", 1}}},
+						{"$set", bson.D{{"lastUpdated", time.Now()}}},
+					}},
+					{"multi", true},
+				},
+			}},
+		},
+	)
+	raw, err := res.Raw()
+	if err != nil {
+		return 0, err
+	}
+
+	return bsontools.RawLookup[int32](raw, "nModified")
 }
 
 func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
