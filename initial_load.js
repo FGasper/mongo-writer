@@ -82,6 +82,13 @@ for (const useCustomID of customIDModes) {
     }
 }
 
+const LOG_INTERVAL_MS = 60_000; // Log every 60 seconds
+let lastLogTime = 0;
+
+function bytesToGiB(bytes) {
+    return (bytes / (1024 ** 3)).toFixed(2);
+}
+
 while (true) {
     for (const useCustomID of customIDModes) {
         for (const docSize of docSizes) {
@@ -109,6 +116,22 @@ while (true) {
                     writeConcern: { w: 0 },
                 },
             );
+        }
+
+        // Log sizes of all collections
+        if (Date.now() - lastLogTime >= LOG_INTERVAL_MS) {
+            let totalSize = 0;
+            for (const customID of customIDModes) {
+                for (const size of docSizes) {
+                    const name = `${customID ? "customID" : "sequentialID"}_${size}`;
+                    const stats = db[name].stats();
+                    const sizeGiB = bytesToGiB(stats.size);
+                    console.log(`[${name}] Size: ${sizeGiB} GiB`);
+                    totalSize += stats.size;
+                }
+            }
+            console.log(`[TOTAL] Size: ${bytesToGiB(totalSize)} GiB`);
+            lastLogTime = Date.now();
         }
     }
 }
