@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mongodb-labs/migration-tools/history"
 	"github.com/mongodb-labs/migration-tools/humantools"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/samber/lo"
@@ -28,6 +29,8 @@ const (
 var (
 	seedsCreated     = sync.Map{} // collName → struct{}{}
 	useServerSideAgg = false
+	sizeHistory      = history.New[int](time.Minute)
+	countHistory     = history.New[int](time.Minute)
 )
 
 func runCreateData(ctx context.Context, _ any, docsPerBatch int) (retErr error) {
@@ -254,6 +257,10 @@ func performCreateInsert(ctx context.Context, coll *mongo.Collection, size int, 
 	if err != nil {
 		return 0, err
 	}
+
+	sizeHistory.Add(totalSize)
+	countHistory.Add(len(docs))
+
 	return len(res.InsertedIDs), nil
 }
 
@@ -275,7 +282,7 @@ func performCreateWork(ctx context.Context, docsPerBatch int) error {
 }
 
 func logSizes(ctx context.Context) {
-	ticker := time.NewTicker(60 * time.Second)
+	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -304,6 +311,15 @@ func logSizes(ctx context.Context) {
 			}
 
 			slog.Info("Total size", "value", humantools.FmtBytes(totalSize))
+
+			slog.Info("Insertion rates",
+				"docsPerSecond", humantools.FmtReal(
+					history.RatePer(countHistory.Get(), time.Second),
+				),
+				"dataPerSecond", humantools.FmtBytes(
+					history.RatePer(sizeHistory.Get(), time.Second),
+				),
+			)
 		}
 	}
 }
