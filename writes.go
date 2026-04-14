@@ -43,7 +43,7 @@ var (
 	localizer = message.NewPrinter(language.English)
 )
 
-func runModifyData(ctx context.Context) error {
+func runModifyData(ctx context.Context) (retErr error) {
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -71,11 +71,18 @@ func runModifyData(ctx context.Context) error {
 
 	//----------------------------------------------
 
-	oldState, restoreTerm, err := setupTerminalRawMode(ctx)
+	oldState, restoreTerm, err := setupTerminalRawMode()
 	if err != nil {
 		panic(err)
 	}
 	defer restoreTerm()
+
+	// Ensure terminal is restored before returning any error
+	defer func() {
+		if retErr != nil {
+			restoreTerm()
+		}
+	}()
 
 	//----------------------------------------------
 

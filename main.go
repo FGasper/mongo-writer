@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/MatusOllah/slogcolor"
@@ -95,8 +95,7 @@ func main() {
 
 	// EXECUTE
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		fmt.Printf("err: %v\n\n", err)
-		log.Fatal(err)
+		fmt.Print(err.Error() + "\n")
 	}
 }
 
@@ -137,18 +136,12 @@ func setupTerminalRawMode() (*term.State, func(), error) {
 		return nil, nil, err
 	}
 
+	var once sync.Once
 	restoreTerm := func() {
-		fmt.Printf("------- restoring terminal\n")
-		_ = term.Restore(int(os.Stdin.Fd()), oldState)
+		once.Do(func() {
+			_ = term.Restore(int(os.Stdin.Fd()), oldState)
+		})
 	}
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGABRT, syscall.SIGALRM)
-	go func() {
-		<-c
-		restoreTerm()
-		os.Exit(1)
-	}()
 
 	return oldState, restoreTerm, nil
 }

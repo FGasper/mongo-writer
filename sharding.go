@@ -63,10 +63,9 @@ func setupSharding(ctx context.Context, client *mongo.Client) error {
 
 	collNames, err := client.Database(dbName).ListCollectionNames(
 		ctx,
-		nil,
+		bson.D{},
 	)
 	if err != nil {
-		fmt.Printf("list collnames: %v\n", err)
 		return fmt.Errorf("get DB %#q collection names: %w", dbName, err)
 	}
 

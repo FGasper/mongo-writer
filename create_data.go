@@ -21,12 +21,16 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
+const (
+	maxBSONSize = 16 << 20
+)
+
 var (
 	seedsCreated     = sync.Map{} // collName → struct{}{}
 	useServerSideAgg = false
 )
 
-func runCreateData(ctx context.Context, _ any, docsPerBatch int) error {
+func runCreateData(ctx context.Context, _ any, docsPerBatch int) (retErr error) {
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -42,21 +46,9 @@ func runCreateData(ctx context.Context, _ any, docsPerBatch int) error {
 
 	setupLogging()
 
-	oldState, restoreTerm, err := setupTerminalRawMode(ctx)
-	if err != nil {
-		panic(err)
-	}
-	defer restoreTerm()
-
 	// Setup signal handling for create-data (different from modify-data)
 	sigCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	go func() {
-		<-sigCtx.Done()
-		restoreTerm()
-		os.Exit(0)
-	}()
 
 	// Initial setup phase - ensure collections exist
 	slog.Info("Setting up collections...")
@@ -65,7 +57,6 @@ func runCreateData(ctx context.Context, _ any, docsPerBatch int) error {
 	// Setup sharding if cluster is sharded
 	slog.Info("Setting up sharding (if applicable)...")
 	if err := setupSharding(sigCtx, client); err != nil {
-		fmt.Printf("setup sharding: %v\n", err)
 		return fmt.Errorf("setup sharding: %w", err)
 	}
 
@@ -132,6 +123,13 @@ func runCreateData(ctx context.Context, _ any, docsPerBatch int) error {
 	// Start with 1 thread
 	printRaw("Starting 1 thread.")
 	addThread()
+
+	// Enable raw terminal mode for keyboard input
+	oldState, restoreTerm, err := setupTerminalRawMode()
+	if err != nil {
+		return fmt.Errorf("setup terminal: %w", err)
+	}
+	defer restoreTerm()
 
 	// Keyboard input loop
 	return handleKeyboardInput(restoreTerm, func(isUp bool) error {
@@ -214,20 +212,39 @@ func performCreateInsert(ctx context.Context, coll *mongo.Collection, size int, 
 	}
 
 	// Default: client-side document creation and insertion
-	docs := make([]any, docsPerBatch)
+	docs := make([]bson.Raw, 0, docsPerBatch)
 	baseString := randomString(size / 3)
 
-	for i := range docsPerBatch {
-		doc := bson.M{
-			"str": baseString + randomString(2*size/3),
-			"num": rand.Float64(),
-			"a":   1,
-		}
+	totalSize := 0
+
+	for range docsPerBatch {
+		var doc bson.D
+
 		if useCustomID {
-			doc["_id"] = rand.Float64()
+			doc = append(doc, bson.E{"_id", rand.Float64()})
 		}
-		docs[i] = doc
+
+		doc = append(doc, bson.D{
+			{"str", baseString + randomString(2*size/3)},
+			{"num", rand.Float64()},
+			{"a", 1},
+		}...)
+
+		rawDoc := lo.Must(bson.Marshal(doc))
+
+		if totalSize+len(rawDoc) > maxBSONSize {
+			break
+		}
+
+		docs = append(docs, rawDoc)
+		totalSize += len(rawDoc)
 	}
+
+	slog.Info("Inserting documents.",
+		"collection", collName,
+		"count", len(docs),
+		"size", humantools.FmtBytes(totalSize),
+	)
 
 	res, err := coll.InsertMany(
 		ctx,
