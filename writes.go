@@ -5,28 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"math/rand"
-	"os"
-	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/MatusOllah/slogcolor"
-	"github.com/fatih/color"
 	"github.com/goaux/timer"
 	"github.com/mongodb-labs/migration-tools/bsontools"
 	"github.com/mongodb-labs/migration-tools/history"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/samber/lo"
-	"github.com/urfave/cli/v3"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/exp/constraints"
-	"golang.org/x/term"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 )
@@ -50,71 +43,7 @@ var (
 	localizer = message.NewPrinter(language.English)
 )
 
-func main() {
-	cmd := &cli.Command{
-		Name:  "mongo-writer",
-		Usage: "A threaded MongoDB load generator",
-
-		// FLags: Map directly to your variables
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "uri",
-				Value:   "mongodb://localhost",
-				Usage:   "MongoDB connection URI",
-				Sources: cli.EnvVars("MONGO_URI"), // Auto-read from ENV
-			},
-			&cli.IntFlag{
-				Name:    "workers",
-				Aliases: []string{"w"},
-				Value:   startWorkers,
-				Usage:   "Number of initial concurrent workers",
-			},
-			&cli.IntFlag{
-				Name:    "docsPerBatch",
-				Aliases: []string{"d"},
-				Value:   newDocsCount,
-				Usage:   "Number of documents to insert per batch",
-			},
-			&cli.IntSliceFlag{
-				Name:    "docSizes",
-				Aliases: []string{"s"},
-				Value:   docSizes,
-				Usage:   "Document sizes (in bytes) to generate",
-			},
-			&cli.BoolFlag{
-				Name:  "debug",
-				Usage: "Enable debug level logging",
-			},
-		},
-
-		// ACTION: This is where your actual main() logic goes
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			// 1. Retrieve Flag Values
-			uri = cmd.String("uri")
-			startWorkers = cmd.Int("workers")
-			newDocsCount = cmd.Int("docsPerBatch")
-
-			// 2. Validate or Parse Complex Flags
-			// (e.g., converting string slice to int slice)
-			docSizes = cmd.IntSlice("docSizes")
-
-			if cmd.Bool("debug") {
-				logLevel = slog.LevelDebug
-			}
-
-			// 3. Run your application logic
-			// return runLoadTest(ctx, uri, workers, docCount)
-			return run(ctx)
-		},
-	}
-
-	// EXECUTE
-	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func run(ctx context.Context) error {
+func runModifyData(ctx context.Context) error {
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -122,7 +51,13 @@ func run(ctx context.Context) error {
 	defer func() { _ = client.Disconnect(ctx) }()
 
 	db = client.Database("test")
-	versionArray = lo.Must(GetVersionArray(ctx, client))
+	var err2 error
+	versionArray, err2 = GetVersionArray(ctx, client)
+	if err2 != nil {
+		return err2
+	}
+
+	setupLogging()
 
 	for _, docSize := range docSizes {
 		for _, useCustomID := range customIDModes {
@@ -136,56 +71,11 @@ func run(ctx context.Context) error {
 
 	//----------------------------------------------
 
-	// 1. Set Terminal to Raw Mode
-	// This disables "echo" (seeing what you type) and buffering (waiting for Enter)
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	oldState, restoreTerm, err := setupTerminalRawMode(ctx)
 	if err != nil {
 		panic(err)
 	}
-	// CRITICAL: Restore terminal on exit, or your shell will be broken!
-	restoreTerm := func() {
-		_ = term.Restore(int(os.Stdin.Fd()), oldState)
-	}
 	defer restoreTerm()
-
-	logOpts := *slogcolor.DefaultOptions
-	logOpts.SrcFileMode = slogcolor.Nop
-
-	// slogcolor’s defaults set the color in the background & leave a weird
-	// space afterward. This uses zerolog.ConsoleWriter’s scheme instead.
-	logOpts.LevelTags = map[slog.Level]string{
-		slog.LevelDebug: color.CyanString("DBG"),
-		slog.LevelInfo:  color.GreenString("INF"),
-		slog.LevelWarn:  color.YellowString("WRN"),
-		slog.LevelError: color.RedString("ERR"),
-	}
-
-	/*
-		logOpts.ReplaceAttr = func(groups []string, a slog.Attr) slog.Attr {
-			// If the key is "msg" and the value is empty, drop it.
-			if a.Key == slog.MessageKey && a.Value.String() == "" {
-				return slog.Attr{} // Return empty attr to discard
-			}
-			return a
-		}
-	*/
-
-	logOpts.Level = logLevel
-
-	crlfWriter := CRLFWriter{os.Stdout}
-	slog.SetDefault(
-		slog.New(
-			slogcolor.NewHandler(crlfWriter, &logOpts),
-		),
-	)
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGABRT, syscall.SIGALRM)
-	go func() {
-		<-c
-		restoreTerm() // Critical: Fix terminal before dying
-		os.Exit(1)
-	}()
 
 	//----------------------------------------------
 
@@ -305,57 +195,15 @@ func run(ctx context.Context) error {
 	}
 
 	// 2. The Input Loop
-	// We read 3 bytes at a time to catch the full arrow key sequence
-	b := make([]byte, 3)
-
-	for {
-		n, err := os.Stdin.Read(b)
-		if err != nil {
-			return fmt.Errorf("read stdin: %w", err)
+	return handleKeyboardInput(restoreTerm, func(isUp bool) error {
+		if isUp {
+			addWorker()
+			slog.Info("Added worker", "newCount", workerCancel.Size())
+		} else {
+			popWorker()
 		}
-
-		if n == 0 {
-			continue
-		}
-
-		switch b[0] {
-		case '\x03': // CTRL-C
-			return nil
-		case '\x1a':
-			restoreTerm()
-
-			// Register for SIGCONT before stopping
-			contC := make(chan os.Signal, 1)
-			signal.Notify(contC, syscall.SIGCONT)
-
-			// Now stop — terminal is already restored
-			p, _ := os.FindProcess(os.Getpid())
-			_ = p.Signal(syscall.SIGSTOP) // SIGTSTP, not SIGSTOP — shell can resume it
-
-			// Block until SIGCONT (fg command)
-			<-contC
-			signal.Stop(contC)
-
-			// Re-enter raw mode
-			oldState, err = term.MakeRaw(int(os.Stdin.Fd()))
-			if err != nil {
-				return fmt.Errorf("re-entering raw mode: %w", err)
-			}
-		case '\x0d': // Enter
-			slog.Info("", "workers", workerCancel.Size())
-		case '\x1b':
-			if b[1] == '[' {
-				switch b[2] {
-				case 'A': // up arrow
-					addWorker()
-					slog.Info("Added worker", "newCount", workerCancel.Size())
-
-				case 'B': // down arrow
-					popWorker()
-				}
-			}
-		}
-	}
+		return nil
+	}, oldState, true)
 }
 
 // A clean way to print in raw mode (since \n doesn't return carriage anymore)

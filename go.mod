@@ -7,7 +7,7 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/goaux/timer v1.1.0
 	github.com/libp2p/go-buffer-pool v0.1.0
-	github.com/mongodb-labs/migration-tools v0.0.0-20260327172435-ed1b4771003e
+	github.com/mongodb-labs/migration-tools v0.0.0-20260410174026-245c36eeb1b9
 	github.com/puzpuzpuz/xsync/v4 v4.4.0
 	github.com/samber/lo v1.52.0
 	github.com/urfave/cli/v3 v3.6.2
@@ -20,6 +20,7 @@ require (
 require (
 	github.com/ccoveille/go-safecast/v2 v2.0.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/klauspost/compress v1.17.6 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
