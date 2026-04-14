@@ -243,7 +243,7 @@ func performCreateInsert(ctx context.Context, coll *mongo.Collection, size int, 
 		totalSize += len(rawDoc)
 	}
 
-	slog.Info("Inserting documents.",
+	slog.Debug("Inserting documents.",
 		"collection", collName,
 		"count", len(docs),
 		"size", humantools.FmtBytes(totalSize),
