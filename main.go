@@ -15,6 +15,10 @@ import (
 	"golang.org/x/term"
 )
 
+const (
+	dbName = "test"
+)
+
 func main() {
 	cmd := &cli.Command{
 		Name:  "mongo-writer",
@@ -127,13 +131,14 @@ func setupLogging() {
 }
 
 // setupTerminalRawMode enables raw terminal mode and returns a cleanup function.
-func setupTerminalRawMode(ctx context.Context) (*term.State, func(), error) {
+func setupTerminalRawMode() (*term.State, func(), error) {
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return nil, nil, err
 	}
 
 	restoreTerm := func() {
+		fmt.Printf("------- restoring terminal\n")
 		_ = term.Restore(int(os.Stdin.Fd()), oldState)
 	}
 

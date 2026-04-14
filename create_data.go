@@ -22,8 +22,8 @@ import (
 )
 
 var (
-	seedsCreated       = sync.Map{} // collName → struct{}{}
-	useServerSideAgg   = false
+	seedsCreated     = sync.Map{} // collName → struct{}{}
+	useServerSideAgg = false
 )
 
 func runCreateData(ctx context.Context, _ any, docsPerBatch int) error {
@@ -61,18 +61,11 @@ func runCreateData(ctx context.Context, _ any, docsPerBatch int) error {
 	// Initial setup phase - ensure collections exist
 	slog.Info("Setting up collections...")
 	setupComplete := false
-	for _, useCustomID := range customIDModes {
-		for _, docSize := range docSizes {
-			collName := getCollectionName(useCustomID, docSize)
-			coll := db.Collection(collName)
-			// Trigger collection creation by getting stats (or could do a single insert)
-			_ = coll.Database().RunCommand(sigCtx, bson.D{{Key: "collStats", Value: collName}}).Err()
-		}
-	}
 
 	// Setup sharding if cluster is sharded
 	slog.Info("Setting up sharding (if applicable)...")
 	if err := setupSharding(sigCtx, client); err != nil {
+		fmt.Printf("setup sharding: %v\n", err)
 		return fmt.Errorf("setup sharding: %w", err)
 	}
 
@@ -224,7 +217,7 @@ func performCreateInsert(ctx context.Context, coll *mongo.Collection, size int, 
 	docs := make([]any, docsPerBatch)
 	baseString := randomString(size / 3)
 
-	for i := 0; i < docsPerBatch; i++ {
+	for i := range docsPerBatch {
 		doc := bson.M{
 			"str": baseString + randomString(2*size/3),
 			"num": rand.Float64(),
@@ -236,7 +229,11 @@ func performCreateInsert(ctx context.Context, coll *mongo.Collection, size int, 
 		docs[i] = doc
 	}
 
-	res, err := coll.InsertMany(ctx, docs, options.InsertMany().SetOrdered(false))
+	res, err := coll.InsertMany(
+		ctx,
+		docs,
+		options.InsertMany().SetOrdered(false),
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -254,12 +251,6 @@ func performCreateWork(ctx context.Context, docsPerBatch int) error {
 				_, err := performCreateInsert(ctx, coll, docSize, useCustomID, docsPerBatch)
 				if err != nil {
 					return fmt.Errorf("insert: %w", err)
-				}
-
-				// Update
-				_, err = performSimpleUpdate(ctx, coll)
-				if err != nil {
-					return fmt.Errorf("simple update: %w", err)
 				}
 			}
 		}

@@ -61,10 +61,25 @@ func setupSharding(ctx context.Context, client *mongo.Client) error {
 
 	slog.Info("Found shards", "count", len(shardNames), "shards", shardNames)
 
+	collNames, err := client.Database(dbName).ListCollectionNames(
+		ctx,
+		nil,
+	)
+	if err != nil {
+		fmt.Printf("list collnames: %v\n", err)
+		return fmt.Errorf("get DB %#q collection names: %w", dbName, err)
+	}
+
 	// Setup sharding for each collection
 	for _, useCustomID := range customIDModes {
 		for _, docSize := range docSizes {
 			collName := getCollectionName(useCustomID, docSize)
+
+			if slices.Contains(collNames, collName) {
+				slog.Info("Collection already exists.", "name", collName)
+				continue
+			}
+
 			if err := setupCollectionSharding(ctx, client, collName, useCustomID, shardNames); err != nil {
 				return fmt.Errorf("setup sharding for %s: %w", collName, err)
 			}
