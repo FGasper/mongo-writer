@@ -19,6 +19,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"golang.org/x/exp/constraints"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -315,6 +316,11 @@ func doWork(ctx context.Context) error {
 						"fraction", localizer.Sprintf("%f", fraction),
 					)
 
+					coll := coll.Database().Collection(
+						coll.Name(),
+						options.Collection().SetWriteConcern(writeconcern.Unacknowledged()),
+					)
+
 					if VersionAtLeast(srcVersion[:], 4, 4) {
 						delRes, err := coll.DeleteMany(ctx, bson.D{{"$sampleRate", fraction}})
 						if err == nil {
@@ -391,6 +397,8 @@ func performSimpleUpdate(ctx context.Context, coll *mongo.Collection) (int32, er
 					{"multi", true},
 				},
 			}},
+			{"bypassValidation", true},
+			{"writeConcern", bson.M{"w": 0}},
 		},
 	)
 	raw, err := res.Raw()
@@ -402,6 +410,11 @@ func performSimpleUpdate(ctx context.Context, coll *mongo.Collection) (int32, er
 }
 
 func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
+	coll = coll.Database().Collection(
+		coll.Name(),
+		options.Collection().SetWriteConcern(writeconcern.Unacknowledged()),
+	)
+
 	// We use []bson.M for the outer stages (as requested),
 	// but strictly use bson.D for the operators to avoid invalid map usage.
 
@@ -504,6 +517,8 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 						{"multi", true},
 					},
 				}},
+				{"bypassValidation", true},
+				{"writeConcern", bson.M{"w": 0}},
 			},
 		)
 		raw, err := res.Raw()
@@ -566,7 +581,18 @@ func performInsert(ctx context.Context, coll *mongo.Collection, size int, useCus
 		newDocs[i] = doc
 	}
 
-	res, err := coll.InsertMany(ctx, newDocs, options.InsertMany().SetOrdered(false))
+	coll = coll.Database().Collection(
+		coll.Name(),
+		options.Collection().SetWriteConcern(writeconcern.Unacknowledged()),
+	)
+
+	res, err := coll.InsertMany(
+		ctx,
+		newDocs,
+		options.InsertMany().
+			SetBypassDocumentValidation(true).
+			SetOrdered(false),
+	)
 	if err != nil {
 		return 0, err
 	}

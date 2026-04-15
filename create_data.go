@@ -21,6 +21,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
@@ -273,10 +274,17 @@ func performCreateInsert(ctx context.Context, coll *mongo.Collection, size int, 
 		"size", humantools.FmtBytes(totalSize),
 	)
 
+	coll = coll.Database().Collection(
+		coll.Name(),
+		options.Collection().SetWriteConcern(writeconcern.Unacknowledged()),
+	)
+
 	res, err := coll.InsertMany(
 		ctx,
 		docs,
-		options.InsertMany().SetOrdered(false),
+		options.InsertMany().
+			SetBypassDocumentValidation(true).
+			SetOrdered(false),
 	)
 	if err != nil {
 		return 0, err
