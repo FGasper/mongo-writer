@@ -517,7 +517,7 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 					},
 				}},
 				{"bypassDocumentValidation", true},
-				{"writeConcern", bson.M{"w": 0}},
+				{"writeConcern", bson.M{"w": 1}},
 			},
 		)
 		raw, err := res.Raw()
