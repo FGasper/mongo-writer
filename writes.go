@@ -398,7 +398,11 @@ func performSimpleUpdate(ctx context.Context, coll *mongo.Collection) (int32, er
 				},
 			}},
 			{"bypassDocumentValidation", true},
-			{"writeConcern", bson.M{"w": 0}},
+
+			// Unacknowledged write concern causes the server to omit
+			// nModified from the response. We want that figure for metrics,
+			// so we take the performance hit.
+			{"writeConcern", bson.M{"w": 1}},
 		},
 	)
 	raw, err := res.Raw()
@@ -410,11 +414,6 @@ func performSimpleUpdate(ctx context.Context, coll *mongo.Collection) (int32, er
 }
 
 func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
-	coll = coll.Database().Collection(
-		coll.Name(),
-		options.Collection().SetWriteConcern(writeconcern.Unacknowledged()),
-	)
-
 	// We use []bson.M for the outer stages (as requested),
 	// but strictly use bson.D for the operators to avoid invalid map usage.
 
