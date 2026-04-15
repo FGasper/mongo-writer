@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 const (
@@ -220,24 +222,46 @@ func performCreateInsert(ctx context.Context, coll *mongo.Collection, size int, 
 
 	totalSize := 0
 
+	idAndNumSize := len(bsoncore.AppendDoubleElement(nil, "num", 0))
+	aSize := len(bsoncore.AppendInt32Element(nil, "a", 1))
+	strSizeBase := len(bsoncore.AppendStringElement(nil, "str", ""))
+
 	for range docsPerBatch {
-		var doc bson.D
+		str := baseString + randomString(2*size/3)
+
+		docLen := 4 +
+			idAndNumSize +
+			aSize +
+			strSizeBase + len(str) +
+			1
 
 		if useCustomID {
-			doc = append(doc, bson.E{"_id", rand.Float64()})
+			docLen += idAndNumSize
 		}
 
-		doc = append(doc, bson.D{
-			{"str", baseString + randomString(2*size/3)},
-			{"num", rand.Float64()},
-			{"a", 1},
-		}...)
-
-		rawDoc := lo.Must(bson.Marshal(doc))
-
-		if totalSize+len(rawDoc) > maxBSONSize {
+		if totalSize+docLen > maxBSONSize {
 			break
 		}
+
+		rawDoc := make(bson.Raw, 4, docLen)
+
+		binary.LittleEndian.PutUint32(rawDoc, uint32(docLen))
+
+		if useCustomID {
+			rawDoc = bsoncore.AppendDoubleElement(rawDoc, "_id", rand.Float64())
+		}
+
+		rawDoc = bsoncore.AppendInt32Element(rawDoc, "a", 1)
+		rawDoc = bsoncore.AppendStringElement(rawDoc, "str", str)
+		rawDoc = bsoncore.AppendDoubleElement(rawDoc, "num", rand.Float64())
+		rawDoc = append(rawDoc, 0) // trailing NUL
+
+		lo.Assertf(
+			len(rawDoc) == docLen,
+			"expect len %d but have %d",
+			docLen,
+			len(rawDoc),
+		)
 
 		docs = append(docs, rawDoc)
 		totalSize += len(rawDoc)
