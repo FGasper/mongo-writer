@@ -395,9 +395,9 @@ func performSimpleUpdate(ctx context.Context, coll *mongo.Collection) (int32, er
 						{"$set", bson.D{{"lastUpdated", time.Now()}}},
 					}},
 					{"multi", true},
+					{"bypassDocumentValidation", true},
 				},
 			}},
-			{"bypassValidation", true},
 			{"writeConcern", bson.M{"w": 0}},
 		},
 	)
@@ -517,7 +517,7 @@ func performUpdate(ctx context.Context, coll *mongo.Collection) (int32, error) {
 						{"multi", true},
 					},
 				}},
-				{"bypassValidation", true},
+				{"bypassDocumentValidation", true},
 				{"writeConcern", bson.M{"w": 0}},
 			},
 		)
