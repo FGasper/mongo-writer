@@ -63,7 +63,7 @@ func runPruneData(ctx context.Context, cmd any, percentage float64) (retErr erro
 			}
 			docsDeleted.Add(result.DeletedCount)
 			collsProcessed.Add(1)
-			slog.Info("Finished 1 collection", "collection", collName, "deleted", result.DeletedCount)
+			slog.Info("Finished collection.", "collection", collName, "deleted", result.DeletedCount)
 		})
 	}
 

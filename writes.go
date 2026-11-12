@@ -374,7 +374,7 @@ func doWork(
 			)
 
 			if useSampleRate() {
-				fraction := float64(toDelete) / float64(curr)
+				fraction := min(1, float64(toDelete)/float64(curr))
 
 				logger.Debug("Deleting random documents.",
 					"collection", collName,
